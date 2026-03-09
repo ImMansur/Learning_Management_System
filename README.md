@@ -155,7 +155,7 @@ npm install
 ```
 
 **Configuration:**
-Ensure `src/firebase.js` is updated with your specific Firebase Client Config (API Key, Auth Domain, Project ID).
+Ensure `src/lib/firebase.ts` is updated with your specific Firebase Client Config (API Key, Auth Domain, Project ID).
 
 **Run the Client:**
 ```bash
