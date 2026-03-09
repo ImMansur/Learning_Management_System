@@ -36,3 +36,6 @@ Thumbs.db
 # Logs
 # -------------------------
 *.log
+ 
+# Ignore Firebase config (contains secrets)
+frontend/src/lib/firebase.ts
