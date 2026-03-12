@@ -4,12 +4,12 @@ import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCyrYHy21fZNd3OpymRjwZqGS8pYXcD8-g",
-  authDomain: "capstone-lms-60591.firebaseapp.com",
-  projectId: "capstone-lms-60591",
-  storageBucket: "capstone-lms-60591.firebasestorage.app",
-  messagingSenderId: "893757131144",
-  appId: "1:893757131144:web:9531d970dd54d03e4a923d",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
 export const firebaseApp = initializeApp(firebaseConfig);

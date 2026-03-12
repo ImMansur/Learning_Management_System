@@ -2,6 +2,8 @@
 # Environment variables
 # -------------------------
 .env
+.env.local
+frontend/.env
 
 # -------------------------
 # Python cache & artifacts
