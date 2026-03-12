@@ -77,6 +77,7 @@ export interface CourseAnalytics {
     completed_modules: number;
     progress: number;
     enrolled_at: string | null;
+    completed_at: string | null;
   }[];
 }
 
@@ -294,6 +295,123 @@ export async function getMyProfile(
   return apiFetch("/courses/my-profile", token);
 }
 
+// ── Activities ─────────────────────────────────────────────
+
+export interface Activity {
+  id: string;
+  student_id: string;
+  student_email: string;
+  type: string;
+  course_id: string;
+  module_id: string;
+  detail: string;
+  created_at: string;
+}
+
+export async function getMyActivities(
+  token: string
+): Promise<{ activities: Activity[] }> {
+  return apiFetch("/courses/my-activities", token);
+}
+
+export interface DashboardStats {
+  enrolled_count: number;
+  completed_modules: number;
+  total_modules: number;
+  courses_completed: number;
+  streak_days: number;
+  achievements: number;
+  achievement_list: string[];
+  quizzes_passed: number;
+}
+
+export async function getMyDashboardStats(
+  token: string
+): Promise<DashboardStats> {
+  return apiFetch("/courses/my-dashboard-stats", token);
+}
+
+// ── Community Posts Endpoints ───────────────────────────────
+
+export interface CommunityPostComment {
+  author_id: string;
+  author_username: string;
+  content: string;
+  created_at: string;
+}
+
+export interface CommunityPost {
+  id: string;
+  author_id: string;
+  author_username: string;
+  course_id: string;
+  course_title: string;
+  subject: string;
+  message: string;
+  comments: CommunityPostComment[];
+  reactions: Record<string, string[]>;
+  created_at: string;
+}
+
+export async function getCommunityPosts(
+  token: string
+): Promise<CommunityPost[]> {
+  return apiFetch("/courses/community-posts/all", token);
+}
+
+export async function createCommunityPost(
+  token: string,
+  courseId: string,
+  subject: string,
+  message: string
+): Promise<CommunityPost> {
+  return apiFetch("/courses/community-posts/create", token, {
+    method: "POST",
+    body: JSON.stringify({ course_id: courseId, subject, message }),
+  });
+}
+
+export async function addCommunityComment(
+  token: string,
+  postId: string,
+  content: string
+): Promise<CommunityPostComment> {
+  return apiFetch(
+    `/courses/community-posts/${encodeURIComponent(postId)}/comments`,
+    token,
+    {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }
+  );
+}
+
+export async function deleteCommunityPost(
+  token: string,
+  postId: string
+): Promise<{ message: string }> {
+  return apiFetch(
+    `/courses/community-posts/${encodeURIComponent(postId)}`,
+    token,
+    { method: "DELETE" }
+  );
+}
+
+export async function toggleReaction(
+  token: string,
+  postId: string,
+  emoji: string
+): Promise<{ reactions: Record<string, string[]> }> {
+  return apiFetch(
+    `/courses/community-posts/${encodeURIComponent(postId)}/react`,
+    token,
+    {
+      method: "POST",
+      body: JSON.stringify({ emoji }),
+    }
+  );
+}
+
 // ── AI Endpoints ────────────────────────────────────────────
 
 export async function getModuleAIAssets(
@@ -330,6 +448,17 @@ export async function getModuleAIAssets(
   });
 
   return data as ModuleAIAssets;
+}
+
+export async function getModulePipelineStatus(
+  moduleId: string
+): Promise<{ status: string; error?: string }> {
+  const res = await fetch(
+    `${API_BASE_URL}/ai/module/${encodeURIComponent(moduleId)}`
+  );
+  if (!res.ok) return { status: "processing" };
+  const data = await res.json();
+  return { status: data.status || "processing", error: data.error };
 }
 
 export function getTTSStreamUrl(moduleId: string, lang: string): string {

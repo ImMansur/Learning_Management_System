@@ -2,6 +2,7 @@ import AppLayout from "@/components/AppLayout";
 import { StatCard } from "@/components/StatCard";
 import { CourseCard } from "@/components/CourseCard";
 import { getAllCourses, Course } from "@/data/courses";
+import { getMyActivities, getMyDashboardStats, Activity, DashboardStats } from "@/services/lmsService";
 import {
   BookOpen,
   Brain,
@@ -12,23 +13,83 @@ import {
   Flame,
   Target,
   PlayCircle,
+  CheckCircle2,
+  GraduationCap,
+  Loader2,
+  Trophy,
 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { useUser } from "@/context/UserContext";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
+
+function formatTimeAgo(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffMs = now - then;
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(dateStr).toLocaleDateString();
+}
 
 const Dashboard = () => {
   const location = useLocation();
-  const { user } = useUser();
+  const { user, getToken } = useUser();
   const firstName = user?.name.split(" ")[0] || "User";
   const [courses, setCourses] = useState<Course[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [activitiesLoading, setActivitiesLoading] = useState(true);
+  const [dashStats, setDashStats] = useState<DashboardStats | null>(null);
 
   useEffect(() => {
     setCourses(getAllCourses());
   }, [location.key]);
 
+  const fetchDashboardData = useCallback(async () => {
+    if (!user) return;
+    setActivitiesLoading(true);
+    try {
+      const token = await getToken();
+      const [actData, statsData] = await Promise.all([
+        getMyActivities(token),
+        getMyDashboardStats(token),
+      ]);
+      setActivities(actData.activities);
+      setDashStats(statsData);
+    } catch {
+      setActivities([]);
+    } finally {
+      setActivitiesLoading(false);
+    }
+  }, [user, getToken]);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, [fetchDashboardData]);
+
   /* ---- Derived stats from real course data ---- */
   const stats = useMemo(() => {
+    if (dashStats) {
+      const overallPct = dashStats.total_modules > 0
+        ? Math.round((dashStats.completed_modules / dashStats.total_modules) * 100)
+        : 0;
+      const inProgress = dashStats.enrolled_count - dashStats.courses_completed;
+      return {
+        completedLessons: dashStats.completed_modules,
+        totalLessons: dashStats.total_modules,
+        inProgress: inProgress > 0 ? inProgress : 0,
+        enrolled: dashStats.enrolled_count,
+        overallPct,
+        streakDays: dashStats.streak_days,
+        achievements: dashStats.achievements,
+        achievementList: dashStats.achievement_list,
+      };
+    }
+    // Fallback to local data while loading
     const allLessons = courses.flatMap((c) => c.modules.flatMap((m) => m.lessons));
     const completedLessons = allLessons.filter((l) => l.completed).length;
     const totalLessons = allLessons.length;
@@ -38,8 +99,8 @@ const Dashboard = () => {
       return done > 0 && done < total;
     }).length;
     const overallPct = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
-    return { completedLessons, totalLessons, inProgress, enrolled: courses.length, overallPct };
-  }, [courses]);
+    return { completedLessons, totalLessons, inProgress, enrolled: courses.length, overallPct, streakDays: 0, achievements: 0, achievementList: [] as string[] };
+  }, [courses, dashStats]);
 
   /* ---- Find the course with the most recent progress for "Continue" ---- */
   const continueCourse = useMemo(() => {
@@ -146,7 +207,7 @@ const Dashboard = () => {
           icon={<BookOpen className="w-6 h-6" />}
         />
         <StatCard
-          title="Lessons Completed"
+          title="Modules Completed"
           value={String(stats.completedLessons)}
           subtitle={`Out of ${stats.totalLessons} total`}
           icon={<TrendingUp className="w-6 h-6" />}
@@ -154,15 +215,15 @@ const Dashboard = () => {
         />
         <StatCard
           title="Learning Streak"
-          value="7 days"
-          subtitle="Keep it going!"
+          value={`${stats.streakDays} day${stats.streakDays !== 1 ? "s" : ""}`}
+          subtitle={stats.streakDays > 0 ? "Keep it going!" : "Start learning today!"}
           icon={<Flame className="w-6 h-6" />}
         />
         <StatCard
           title="Achievements"
-          value="3"
-          subtitle="1 new this week"
-          icon={<Target className="w-6 h-6" />}
+          value={String(stats.achievements)}
+          subtitle={stats.achievementList.length > 0 ? stats.achievementList[stats.achievementList.length - 1] : "Earn your first!"}
+          icon={<Trophy className="w-6 h-6" />}
         />
       </div>
 
@@ -209,23 +270,43 @@ const Dashboard = () => {
       <div>
         <h2 className="text-xl font-bold text-foreground mb-5">Recent Activity</h2>
         <div className="bg-card rounded-xl border border-border divide-y divide-border">
-          {[
-            { action: "Completed lesson", detail: "What is Artificial Intelligence?", time: "2 hours ago", icon: BookOpen, color: "bg-success/10 text-success" },
-            { action: "AI Summary generated", detail: "Deep Learning Module Overview", time: "5 hours ago", icon: Brain, color: "bg-accent/10 text-accent" },
-            { action: "Started course", detail: "Cloud Computing & Infrastructure", time: "1 day ago", icon: Sparkles, color: "bg-info/10 text-info" },
-            { action: "Quiz completed", detail: "ML Fundamentals — Score: 85%", time: "2 days ago", icon: Target, color: "bg-warning/10 text-warning" },
-          ].map((activity, i) => (
-            <div key={i} className="flex items-center gap-4 px-6 py-4">
-              <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${activity.color}`}>
-                <activity.icon className="w-4 h-4" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-card-foreground">{activity.action}</p>
-                <p className="text-xs text-muted-foreground truncate">{activity.detail}</p>
-              </div>
-              <span className="text-xs text-muted-foreground whitespace-nowrap">{activity.time}</span>
+          {activitiesLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="w-5 h-5 animate-spin text-accent" />
             </div>
-          ))}
+          ) : activities.length === 0 ? (
+            <div className="px-6 py-10 text-center text-sm text-muted-foreground">
+              No recent activity yet. Enroll in a course to get started!
+            </div>
+          ) : (
+            activities.slice(0, 4).map((act) => {
+              const iconMap: Record<string, { icon: typeof BookOpen; color: string }> = {
+                enrollment: { icon: BookOpen, color: "bg-info/10 text-info" },
+                quiz_attempt: { icon: Target, color: "bg-warning/10 text-warning" },
+                module_complete: { icon: CheckCircle2, color: "bg-success/10 text-success" },
+              };
+              const { icon: Icon, color } = iconMap[act.type] || { icon: Sparkles, color: "bg-accent/10 text-accent" };
+              const labelMap: Record<string, string> = {
+                enrollment: "Enrolled in course",
+                quiz_attempt: "Quiz attempted",
+                module_complete: "Module completed",
+              };
+              const label = labelMap[act.type] || act.type;
+              const timeAgo = act.created_at ? formatTimeAgo(act.created_at) : "";
+              return (
+                <div key={act.id} className="flex items-center gap-4 px-6 py-4">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${color}`}>
+                    <Icon className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-card-foreground">{label}</p>
+                    <p className="text-xs text-muted-foreground truncate">{act.detail}</p>
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">{timeAgo}</span>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
     </AppLayout>

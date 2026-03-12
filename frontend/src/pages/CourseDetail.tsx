@@ -173,8 +173,8 @@ const CourseDetail = () => {
               {modules.map((mod, mi) => {
                 const isCompleted = completedModules.has(mod.id);
                 const isProcessing = mod.status === "processing";
-                // Module is accessible if enrolled
-                const isLocked = !isEnrolled;
+                // Module is accessible if enrolled AND (first module OR previous module completed)
+                const isLocked = !isEnrolled || (mi > 0 && !completedModules.has(modules[mi - 1].id));
                 return (
                   <div key={mod.id} className="bg-card rounded-xl border border-border overflow-hidden">
                     <div className="px-6 py-4 border-b border-border flex items-center justify-between">
@@ -202,7 +202,9 @@ const CourseDetail = () => {
 
                     <div className="px-6 py-4">
                       {isLocked ? (
-                        <p className="text-sm text-muted-foreground">Enroll to access this module.</p>
+                        <p className="text-sm text-muted-foreground">
+                          {!isEnrolled ? "Enroll to access this module." : "Complete the previous module first."}
+                        </p>
                       ) : (
                         <div className="flex items-center gap-3 flex-wrap">
                           {mod.status === "completed" && (

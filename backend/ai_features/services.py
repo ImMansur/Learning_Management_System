@@ -205,38 +205,26 @@ def run_ai_pipeline(video_sas_url, course_id, module_id, video_name):
             ]
         )
         summary_md = response.choices[0].message.content
-        
-                # --- STEP 4: QUIZ GENERATION ---
+
+        doc_ref.update({"status": "generating_quiz", "summary_markdown": summary_md})
+
+        # --- STEP 4: QUIZ GENERATION ---
         print("📝 Step 4: Generating Quiz...")
         questions = generate_quiz(transcript_text)
+
+        doc_ref.update({"status": "vectorizing", "questions": questions})
 
         # --- STEP 5: VECTORIZE ---
         print("🌲 Step 5: Ingesting into Pinecone...")
         ingest_to_pinecone(transcript_text, course_id, module_id)
 
-                # --- FINAL SAVE ---
+        # --- FINAL SAVE ---
         doc_ref.update({
             "status": "completed",
-            "summary_markdown": summary_md,
-            "questions": questions,
             "model_used": settings.AZURE_OPENAI_DEPLOYMENT,
             "quiz_generated_at": firestore.SERVER_TIMESTAMP,
             "is_vectorized": True
         })
-
-
-        
-
-      
-
-        # --- STEP 4: SAVE FINAL RESULTS ---
-        doc_ref.update({
-    "status": "completed",
-    "summary_markdown": summary_md,
-    "questions": questions,
-    "model_used": settings.AZURE_OPENAI_DEPLOYMENT,
-    "quiz_generated_at": firestore.SERVER_TIMESTAMP
-})
         db.collection("courses").document(course_id).collection("modules").document(module_id).update({
             "status": "completed"
         })

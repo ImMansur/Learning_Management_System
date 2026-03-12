@@ -136,9 +136,14 @@ const StudentProgress = () => {
                             <span>
                               {student.completed_modules}/{analytics.total_modules} modules completed
                             </span>
-                            {student.enrolled_at && (
-                              <span>Enrolled: {new Date(student.enrolled_at).toLocaleDateString()}</span>
-                            )}
+                            <div className="flex items-center gap-4">
+                              {student.enrolled_at && (
+                                <span>Enrolled: {new Date(student.enrolled_at).toLocaleDateString()}</span>
+                              )}
+                              {student.progress === 100 && student.completed_at && (
+                                <span className="text-success font-medium">Completed: {new Date(student.completed_at).toLocaleDateString()}</span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       ))}

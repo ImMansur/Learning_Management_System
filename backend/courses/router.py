@@ -135,6 +135,20 @@ class TrainerUpdateRequest(BaseModel):
     message: str
 
 
+class CommunityPostRequest(BaseModel):
+    course_id: str
+    subject: str
+    message: str
+
+
+class CommentRequest(BaseModel):
+    content: str
+
+
+class ReactionRequest(BaseModel):
+    emoji: str
+
+
 @router.post("/")
 async def create_course(
         title: str = Form(...),
@@ -317,6 +331,13 @@ async def enroll_in_course(course_id: str, background_tasks: BackgroundTasks, us
         return {"message": "Successfully enrolled!"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            course_doc2 = db.collection("courses").document(course_id).get()
+            ct = course_doc2.to_dict().get("title", "Unknown Course") if course_doc2.exists else "Unknown Course"
+            _log_activity(user["uid"], user.get("email", ""), "enrollment", course_id=course_id, detail=f"Enrolled in {ct}")
+        except Exception:
+            pass
 
 @router.get("/{course_id}/modules")
 async def get_course_modules(course_id: str, user: dict = Depends(get_current_user)):
@@ -362,6 +383,13 @@ async def complete_module(course_id: str, module_id: str, background_tasks: Back
         return {"message": "Module completed successfully!"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            course_doc2 = db.collection("courses").document(course_id).get()
+            ct = course_doc2.to_dict().get("title", "Unknown") if course_doc2.exists else "Unknown"
+            _log_activity(user["uid"], user.get("email", ""), "module_complete", course_id=course_id, module_id=module_id, detail=f"Completed module in {ct}")
+        except Exception:
+            pass
 
 
 # ── Quiz Results ─────────────────────────────────────────────
@@ -372,6 +400,7 @@ class QuizResultPayload(BaseModel):
     passed: bool
 
 
+
 @router.post("/{course_id}/modules/{module_id}/quiz-result")
 async def submit_quiz_result(
     course_id: str,
@@ -379,53 +408,197 @@ async def submit_quiz_result(
     payload: QuizResultPayload,
     user: dict = Depends(get_current_user),
 ):
-    """Saves a quiz attempt result for a student."""
+    """Saves a quiz attempt result for a student in Firestore."""
     try:
-        doc_ref = db.collection("quiz_results").document()
-        doc_ref.set({
+        doc_id = f"{user['uid']}_{course_id}_{module_id}_{int(datetime.utcnow().timestamp())}"
+        new_result = {
+            "id": doc_id,
             "student_id": user["uid"],
+            "student_name": user.get("name", ""),
             "student_email": user.get("email", ""),
             "course_id": course_id,
             "module_id": module_id,
             "score": payload.score,
             "total": payload.total,
             "passed": payload.passed,
-            "attempted_at": firestore.SERVER_TIMESTAMP,
-        })
-        return {"message": "Quiz result saved", "id": doc_ref.id}
+            "attempted_at": datetime.utcnow().isoformat() + "Z",
+        }
+        db.collection("quiz_results").document(doc_id).set(new_result)
+
+        # Log activity
+        course_doc = db.collection("courses").document(course_id).get()
+        ct = course_doc.to_dict().get("title", "Unknown") if course_doc.exists else "Unknown"
+        status_text = "Passed" if payload.passed else "Failed"
+        _log_activity(user["uid"], user.get("email", ""), "quiz_attempt", course_id=course_id, module_id=module_id, detail=f"Quiz {status_text} — {payload.score}/{payload.total} in {ct}")
+
+        return {"message": "Quiz result saved", "id": doc_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to save quiz result: {e}")
 
 
 @router.get("/{course_id}/quiz-results")
 async def get_course_quiz_results(course_id: str, user: dict = Depends(get_current_user)):
-    """Fetches all quiz results for a course (trainer view)."""
+    """Fetches all quiz results for a course (trainer view) from Firestore."""
     try:
-        results_ref = (
-            db.collection("quiz_results")
-            .where(filter=FieldFilter("course_id", "==", course_id))
-            .order_by("attempted_at", direction=firestore.Query.DESCENDING)
-            .stream()
-        )
+        docs = db.collection("quiz_results").where(
+            filter=FieldFilter("course_id", "==", course_id)
+        ).stream()
         results = []
-        for doc in results_ref:
+        for doc in docs:
             d = doc.to_dict()
-            display_name = _resolve_user_name(d.get("student_id", ""))
-            attempted_at = d.get("attempted_at")
-            results.append({
-                "id": doc.id,
-                "student_id": d.get("student_id", ""),
-                "student_name": display_name,
-                "student_email": d.get("student_email", ""),
-                "module_id": d.get("module_id", ""),
-                "score": d.get("score", 0),
-                "total": d.get("total", 0),
-                "passed": d.get("passed", False),
-                "attempted_at": attempted_at.isoformat() if hasattr(attempted_at, "isoformat") else str(attempted_at) if attempted_at else None,
-            })
+            if d is None:
+                continue
+            # Ensure all fields are JSON-serializable
+            for key, val in d.items():
+                if hasattr(val, 'isoformat'):
+                    d[key] = val.isoformat()
+            results.append(d)
+        results.sort(key=lambda r: r.get("attempted_at", ""), reverse=True)
         return {"results": results}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to load quiz results: {e}")
+
+
+# ── Activities ───────────────────────────────────────────────
+
+def _log_activity(student_id: str, student_email: str, activity_type: str, course_id: str = "", module_id: str = "", detail: str = ""):
+    """Helper to log an activity to Firestore."""
+    try:
+        doc_ref = db.collection("activities").document()
+        doc_ref.set({
+            "student_id": student_id,
+            "student_email": student_email,
+            "type": activity_type,
+            "course_id": course_id,
+            "module_id": module_id,
+            "detail": detail,
+            "created_at": firestore.SERVER_TIMESTAMP,
+        })
+    except Exception:
+        pass  # Activity logging should never break the main flow
+
+
+@router.get("/my-activities")
+async def get_my_activities(user: dict = Depends(get_current_user)):
+    """Fetches recent activities for the current student."""
+    try:
+        docs = db.collection("activities").where(
+            filter=FieldFilter("student_id", "==", user["uid"])
+        ).stream()
+        results = []
+        for doc in docs:
+            d = doc.to_dict()
+            if d is None:
+                continue
+            d["id"] = doc.id
+            for key, val in d.items():
+                if hasattr(val, 'isoformat'):
+                    d[key] = val.isoformat()
+            results.append(d)
+        results.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+        return {"activities": results[:20]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load activities: {e}")
+
+
+@router.get("/my-dashboard-stats")
+async def get_my_dashboard_stats(user: dict = Depends(get_current_user)):
+    """Returns learner dashboard stats: enrolled courses, completed modules, streak, achievements."""
+    try:
+        uid = user["uid"]
+        # 1. Profile → enrollments & completed modules
+        user_doc = db.collection("users").document(uid).get()
+        user_data = user_doc.to_dict() if user_doc.exists else {}
+        enrollments = user_data.get("enrollments", {})
+        enrolled_count = len(enrollments)
+        completed_modules_total = sum(
+            len(e.get("completed_modules", [])) for e in enrollments.values()
+        )
+
+        # Count total modules across enrolled courses
+        total_modules = 0
+        courses_completed = 0
+        for cid in enrollments:
+            mods = db.collection("courses").document(cid).collection("modules").get()
+            course_total = len(mods)
+            total_modules += course_total
+            completed_in_course = len(enrollments[cid].get("completed_modules", []))
+            if course_total > 0 and completed_in_course >= course_total:
+                courses_completed += 1
+
+        # 2. Activities → streak + achievements
+        activity_docs = db.collection("activities").where(
+            filter=FieldFilter("student_id", "==", uid)
+        ).stream()
+        activity_dates = set()
+        quiz_passed_count = 0
+        for doc in activity_docs:
+            d = doc.to_dict()
+            if d is None:
+                continue
+            created = d.get("created_at")
+            if created:
+                if hasattr(created, 'date'):
+                    activity_dates.add(created.date())
+                elif isinstance(created, str):
+                    try:
+                        activity_dates.add(datetime.fromisoformat(created.replace("Z", "+00:00")).date())
+                    except Exception:
+                        pass
+            if d.get("type") == "quiz_attempt" and "Passed" in d.get("detail", ""):
+                quiz_passed_count += 1
+
+        # Calculate streak (consecutive days ending today or yesterday)
+        from datetime import date, timedelta
+        today = date.today()
+        streak = 0
+        check_day = today
+        while check_day in activity_dates:
+            streak += 1
+            check_day -= timedelta(days=1)
+        # If no activity today, start from yesterday
+        if streak == 0:
+            check_day = today - timedelta(days=1)
+            while check_day in activity_dates:
+                streak += 1
+                check_day -= timedelta(days=1)
+
+        # Simple achievements
+        achievements = 0
+        achievement_list = []
+        if enrolled_count >= 1:
+            achievements += 1
+            achievement_list.append("First Enrollment")
+        if completed_modules_total >= 1:
+            achievements += 1
+            achievement_list.append("First Module Done")
+        if quiz_passed_count >= 1:
+            achievements += 1
+            achievement_list.append("Quiz Master")
+        if courses_completed >= 1:
+            achievements += 1
+            achievement_list.append("Course Graduate")
+        if streak >= 3:
+            achievements += 1
+            achievement_list.append("3-Day Streak")
+        if streak >= 7:
+            achievements += 1
+            achievement_list.append("Week Warrior")
+
+        return {
+            "enrolled_count": enrolled_count,
+            "completed_modules": completed_modules_total,
+            "total_modules": total_modules,
+            "courses_completed": courses_completed,
+            "streak_days": streak,
+            "achievements": achievements,
+            "achievement_list": achievement_list,
+            "quizzes_passed": quiz_passed_count,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load dashboard stats: {e}")
 
 
 @router.get("/my-profile")
@@ -587,9 +760,166 @@ async def get_course_analytics(course_id: str, user: dict = Depends(get_current_
                     "completed_modules": completed_modules,
                     "progress": progress,
                     "enrolled_at": enrolled_at.isoformat() if hasattr(enrolled_at, 'isoformat') else str(enrolled_at) if enrolled_at else None,
+                    "completed_at": None,
                 })
+
+        # For students who completed 100%, find the completion date from activities
+        completed_student_ids = [s["student_id"] for s in analytics if s["progress"] == 100]
+        if completed_student_ids:
+            for sid in completed_student_ids:
+                act_docs = db.collection("activities").where(
+                    filter=FieldFilter("student_id", "==", sid)
+                ).where(
+                    filter=FieldFilter("course_id", "==", course_id)
+                ).where(
+                    filter=FieldFilter("type", "==", "module_complete")
+                ).stream()
+                latest = None
+                for adoc in act_docs:
+                    ad = adoc.to_dict()
+                    created = ad.get("created_at")
+                    if created:
+                        ts = created.isoformat() if hasattr(created, 'isoformat') else str(created)
+                        if latest is None or ts > latest:
+                            latest = ts
+                # Set completed_at on the matching student
+                for s in analytics:
+                    if s["student_id"] == sid and latest:
+                        s["completed_at"] = latest
 
         return {"total_modules": total_modules, "students": analytics}
     except Exception as e:
         print(f"Error fetching analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Community Posts ──────────────────────────────────────────
+
+@router.get("/community-posts/all")
+async def get_community_posts(user: dict = Depends(get_current_user)):
+    """Returns all community posts, newest first."""
+    try:
+        docs = db.collection("community_posts").order_by(
+            "created_at", direction=firestore.Query.DESCENDING
+        ).stream()
+        posts = []
+        for doc in docs:
+            data = doc.to_dict()
+            data["id"] = doc.id
+            created = data.get("created_at")
+            if hasattr(created, "isoformat"):
+                data["created_at"] = created.isoformat()
+            comments = data.get("comments", [])
+            for c in comments:
+                ca = c.get("created_at")
+                if hasattr(ca, "isoformat"):
+                    c["created_at"] = ca.isoformat()
+            posts.append(data)
+        return posts
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/community-posts/create")
+async def create_community_post(body: CommunityPostRequest, user: dict = Depends(get_current_user)):
+    """Creates a new community post stored in Firestore."""
+    try:
+        author_name = _resolve_user_name(user["uid"], token_data=user)
+        doc_ref = db.collection("community_posts").document()
+        post_data = {
+            "author_id": user["uid"],
+            "author_username": author_name,
+            "course_id": body.course_id,
+            "subject": body.subject,
+            "message": body.message,
+            "comments": [],
+            "reactions": {},
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        # Resolve course title
+        course_doc = db.collection("courses").document(body.course_id).get()
+        if course_doc.exists:
+            post_data["course_title"] = course_doc.to_dict().get("title", "Unknown Course")
+        else:
+            post_data["course_title"] = "Unknown Course"
+
+        doc_ref.set(post_data)
+        post_data["id"] = doc_ref.id
+        return post_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/community-posts/{post_id}/comments")
+async def add_comment(post_id: str, body: CommentRequest, user: dict = Depends(get_current_user)):
+    """Adds a comment to an existing community post."""
+    try:
+        doc_ref = db.collection("community_posts").document(post_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Post not found")
+
+        author_name = _resolve_user_name(user["uid"], token_data=user)
+        comment = {
+            "author_id": user["uid"],
+            "author_username": author_name,
+            "content": body.content,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        doc_ref.update({"comments": ArrayUnion([comment])})
+        return comment
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/community-posts/{post_id}/react")
+async def toggle_reaction(post_id: str, body: ReactionRequest, user: dict = Depends(get_current_user)):
+    """Toggles a reaction (emoji) on a community post for the current user."""
+    try:
+        doc_ref = db.collection("community_posts").document(post_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Post not found")
+
+        data = doc.to_dict()
+        reactions = data.get("reactions", {})
+        emoji = body.emoji
+        uid = user["uid"]
+
+        user_list = reactions.get(emoji, [])
+        if uid in user_list:
+            user_list.remove(uid)
+        else:
+            user_list.append(uid)
+
+        if user_list:
+            reactions[emoji] = user_list
+        else:
+            reactions.pop(emoji, None)
+
+        doc_ref.update({"reactions": reactions})
+        return {"reactions": reactions}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/community-posts/{post_id}")
+async def delete_community_post(post_id: str, user: dict = Depends(get_current_user)):
+    """Deletes a community post (only author can delete)."""
+    try:
+        doc_ref = db.collection("community_posts").document(post_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Post not found")
+        if doc.to_dict().get("author_id") != user["uid"]:
+            raise HTTPException(status_code=403, detail="You can only delete your own posts")
+        doc_ref.delete()
+        return {"message": "Post deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
+import confetti from "canvas-confetti";
 import AppLayout from "@/components/AppLayout";
 import {
   getModuleAIAssets,
@@ -7,11 +8,13 @@ import {
   getCourseCatalog,
   completeModule,
   submitQuizResult,
+  getMyProfile,
   AIQuizQuestion,
   BackendModule,
 } from "@/services/lmsService";
 import { useUser } from "@/context/UserContext";
 import { markQuizPassed } from "@/services/quizService";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -55,6 +58,18 @@ const ModuleQuiz = () => {
         setCourseTitle(course?.title || "Course");
         setModules(mods);
 
+        // Lock check: redirect if previous module not completed
+        const idx = mods.findIndex((m) => m.id === moduleId);
+        if (idx > 0) {
+          const profileData = await getMyProfile(token).catch(() => null);
+          const completed = new Set(profileData?.enrollments?.[courseId!]?.completed_modules || []);
+          if (!completed.has(mods[idx - 1].id)) {
+            toast.error("Complete the previous module first.");
+            navigate(`/courses/${courseId}`, { replace: true });
+            return;
+          }
+        }
+
         const mod = mods.find((m) => m.id === moduleId);
         setModuleTitle(mod?.title || "Module");
 
@@ -96,8 +111,21 @@ const ModuleQuiz = () => {
 
     const isPassed = correct === questions.length;
 
-    // Save quiz result to backend
+    // Save quiz result to backend and always save locally for analytics
     if (courseId && moduleId && user) {
+      const quizAttempt = {
+        id: `${user.uid}_${courseId}_${moduleId}_${Date.now()}`,
+        student_id: user.uid,
+        student_name: user.displayName || user.email || "Anonymous",
+        student_email: user.email || "",
+        module_id: moduleId,
+        course_id: courseId,
+        score: correct,
+        total: questions.length,
+        passed: isPassed,
+        attempted_at: new Date().toISOString(),
+      };
+      // Save to backend
       try {
         const token = await getToken();
         await submitQuizResult(token, courseId, moduleId, {
@@ -108,6 +136,7 @@ const ModuleQuiz = () => {
       } catch (err) {
         console.error("Failed to save quiz result:", err);
       }
+
     }
 
     // If passed (100%), mark module as complete and record quiz pass
@@ -119,8 +148,24 @@ const ModuleQuiz = () => {
       } catch (err) {
         console.error("Failed to mark module complete:", err);
       }
+      // Fire confetti celebration
+      fireConfetti();
     }
   };
+
+  const fireConfetti = useCallback(() => {
+    const duration = 3000;
+    const end = Date.now() + duration;
+    const colors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
+    const frame = () => {
+      confetti({ particleCount: 3, angle: 60, spread: 55, origin: { x: 0 }, colors });
+      confetti({ particleCount: 3, angle: 120, spread: 55, origin: { x: 1 }, colors });
+      if (Date.now() < end) requestAnimationFrame(frame);
+    };
+    // Big initial burst
+    confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors });
+    frame();
+  }, []);
 
   const handleRetry = () => {
     setAnswers({});
@@ -267,12 +312,18 @@ const ModuleQuiz = () => {
                   Start {nextModule.title} <ChevronRight className="w-4 h-4" />
                 </Link>
               ) : (
-                <Link
-                  to={`/courses/${courseId}`}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-gradient-accent text-accent-foreground text-sm font-semibold hover:opacity-90 transition-opacity"
-                >
-                  Back to Course <ChevronRight className="w-4 h-4" />
-                </Link>
+                <>
+                  <p className="text-sm font-semibold text-success">🎉 Course Completed!</p>
+                  <p className="text-xs text-muted-foreground">
+                    Your course certificate will be sent to your email shortly.
+                  </p>
+                  <button
+                    onClick={() => navigate("/courses")}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-gradient-accent text-accent-foreground text-sm font-semibold hover:opacity-90 transition-opacity"
+                  >
+                    Browse Courses <ChevronRight className="w-4 h-4" />
+                  </button>
+                </>
               )}
             </div>
           ) : (

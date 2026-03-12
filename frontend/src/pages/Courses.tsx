@@ -1,3 +1,11 @@
+// Import fallback images
+import courseAi from "@/assets/course-ai.jpg";
+import courseData from "@/assets/course-data.jpg";
+import courseCloud from "@/assets/course-cloud.jpg";
+import courseDevops from "@/assets/course-devops.jpg";
+
+const fallbackImages = [courseAi, courseData, courseCloud, courseDevops];
+
 import { useState, useEffect } from "react";
 import { useLocation, Link, useNavigate } from "react-router-dom";
 import AppLayout from "@/components/AppLayout";
@@ -120,11 +128,40 @@ const Courses = () => {
             const totalModules = course.module_count ?? 0;
             const progress = totalModules > 0 ? Math.round((completedModules / totalModules) * 100) : 0;
 
+            // Pick a random fallback image if course.image is missing/empty/undefined
+            const courseImage = course.image && course.image.trim() !== "" ? course.image : fallbackImages[Math.floor(Math.random() * fallbackImages.length)];
             return (
               <div
                 key={course.id}
-                className="bg-card rounded-xl border border-border overflow-hidden hover:shadow-lg transition-all duration-300 hover:-translate-y-1 group"
+                className="bg-card rounded-xl border border-border overflow-hidden hover:shadow-lg transition-all duration-300 hover:-translate-y-1 group relative"
               >
+                {/* Category badge */}
+                {course.category && (
+                  <span className="absolute top-3 left-3 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-full shadow-md z-10">
+                    {course.category}
+                  </span>
+                )}
+                {/* Completed badge */}
+                {enrolled && progress === 100 && (
+                  <span className="absolute top-3 right-3 bg-success text-white text-xs font-bold px-3 py-1 rounded-full shadow-md z-10">
+                    Completed
+                  </span>
+                )}
+                {/* Course image with hover play button */}
+                <div className="relative w-full h-40 group/image">
+                  <img
+                    src={courseImage}
+                    alt={course.title}
+                    className="w-full h-40 object-cover object-center"
+                    loading="lazy"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover/image:opacity-100 transition-opacity duration-200 bg-black/30 cursor-pointer">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="white" viewBox="0 0 24 24" width="48" height="48" className="drop-shadow-lg">
+                      <circle cx="12" cy="12" r="12" fill="rgba(0,0,0,0.5)" />
+                      <polygon points="10,8 16,12 10,16" fill="white" />
+                    </svg>
+                  </div>
+                </div>
                 <div className="p-5">
                   <h3 className="font-semibold text-accent text-lg mb-1 group-hover:text-accent/80 transition-colors">
                     {course.title}

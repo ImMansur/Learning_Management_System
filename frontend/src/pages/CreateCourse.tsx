@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import TrainerLayout from "@/components/TrainerLayout";
 import { Button } from "@/components/ui/button";
@@ -19,9 +19,14 @@ import {
   Video,
   BookOpen,
   AlertCircle,
+  Mic,
+  FileText,
+  HelpCircle,
+  Database,
+  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
-import { createCourse, uploadModule } from "@/services/lmsService";
+import { createCourse, uploadModule, getModulePipelineStatus } from "@/services/lmsService";
 import { useUser } from "@/context/UserContext";
 
 type Step = "info" | "modules" | "processing" | "complete";
@@ -32,6 +37,7 @@ interface ModuleForm {
   uploadStatus?: "pending" | "uploading" | "done" | "error";
   moduleId?: string;
   error?: string;
+  pipelineStatus?: string;
 }
 
 const CreateCourse = () => {
@@ -43,6 +49,7 @@ const CreateCourse = () => {
   // Step 1: Course Info
   const [courseTitle, setCourseTitle] = useState("");
   const [courseCategory, setCourseCategory] = useState("");
+  const [courseDescription, setCourseDescription] = useState("");
 
   // Step 2: Modules (each module = one video)
   const [modules, setModules] = useState<ModuleForm[]>([{ title: "" }]);
@@ -50,6 +57,19 @@ const CreateCourse = () => {
   // Processing
   const [processingStatus, setProcessingStatus] = useState("");
   const [processingProgress, setProcessingProgress] = useState(0);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Pipeline status labels & progress weights
+  const PIPELINE_STEPS: Record<string, { label: string; icon: React.ReactNode; pct: number }> = {
+    uploading: { label: "Uploading video...", icon: <Video className="w-4 h-4" />, pct: 5 },
+    processing: { label: "Queued for processing...", icon: <Loader2 className="w-4 h-4 animate-spin" />, pct: 10 },
+    transcribing: { label: "Transcribing audio...", icon: <Mic className="w-4 h-4" />, pct: 30 },
+    summarizing: { label: "Generating summary...", icon: <FileText className="w-4 h-4" />, pct: 55 },
+    generating_quiz: { label: "Creating quiz questions...", icon: <HelpCircle className="w-4 h-4" />, pct: 70 },
+    vectorizing: { label: "Building knowledge base...", icon: <Database className="w-4 h-4" />, pct: 85 },
+    completed: { label: "Completed", icon: <CheckCircle2 className="w-4 h-4 text-success" />, pct: 100 },
+    failed: { label: "Failed", icon: <XCircle className="w-4 h-4 text-destructive" />, pct: 0 },
+  };
 
   const categories = [
     "AI / ML",
@@ -81,7 +101,7 @@ const CreateCourse = () => {
 
   const validateStep = (): boolean => {
     if (step === "info") {
-      if (!courseTitle.trim() || !courseCategory) {
+      if (!courseTitle.trim() || !courseCategory || !courseDescription.trim()) {
         toast.error("Please fill in all required fields");
         return false;
       }
@@ -114,7 +134,7 @@ const CreateCourse = () => {
 
       // 1. Create the course
       setProcessingStatus("Creating course...");
-      const { course_id } = await createCourse(token, courseTitle.trim(), courseCategory);
+      const { course_id } = await createCourse(token, courseTitle.trim(), courseCategory, courseDescription.trim());
       setProcessingProgress(10);
 
       // 2. Upload each module with its video
@@ -143,9 +163,10 @@ const CreateCourse = () => {
         }
       }
 
-      setProcessingProgress(100);
-      setProcessingStatus("Course created successfully!");
-      setStep("complete");
+      setProcessingProgress(15);
+      setProcessingStatus("All videos uploaded — AI processing in progress...");
+
+      // Don't go to complete yet — polling will handle that
     } catch (err: any) {
       console.error("Create course failed:", err);
       toast.error("Failed to create course: " + (err.message || "Unknown error"));
@@ -154,6 +175,83 @@ const CreateCourse = () => {
       setLoading(false);
     }
   };
+
+  // ── Polling: track each module's AI pipeline status ──
+  const pollPipelineStatuses = useCallback(async () => {
+    const modulesWithIds = modules.filter((m) => m.moduleId);
+    if (modulesWithIds.length === 0) return;
+
+    let allDone = true;
+    const updated = [...modules];
+
+    for (let i = 0; i < updated.length; i++) {
+      const mod = updated[i];
+      if (!mod.moduleId) continue;
+      if (mod.pipelineStatus === "completed" || mod.pipelineStatus === "failed") continue;
+
+      try {
+        const result = await getModulePipelineStatus(mod.moduleId);
+        updated[i] = { ...updated[i], pipelineStatus: result.status };
+        if (result.status === "failed") {
+          updated[i].error = result.error || "Pipeline processing failed";
+        }
+        if (result.status !== "completed" && result.status !== "failed") {
+          allDone = false;
+        }
+      } catch {
+        allDone = false;
+      }
+    }
+
+    setModules(updated);
+
+    // Calculate overall progress
+    const tracked = updated.filter((m) => m.moduleId);
+    if (tracked.length > 0) {
+      const avgPct = tracked.reduce((sum, m) => {
+        const stepInfo = PIPELINE_STEPS[m.pipelineStatus || "processing"];
+        return sum + (stepInfo?.pct ?? 10);
+      }, 0) / tracked.length;
+      setProcessingProgress(Math.round(avgPct));
+
+      // Current step description
+      const inProgress = tracked.find((m) => m.pipelineStatus !== "completed" && m.pipelineStatus !== "failed");
+      if (inProgress) {
+        const stepInfo = PIPELINE_STEPS[inProgress.pipelineStatus || "processing"];
+        setProcessingStatus(`${inProgress.title}: ${stepInfo?.label || "Processing..."}`);
+      }
+    }
+
+    if (allDone) {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+      pollingRef.current = null;
+      setProcessingProgress(100);
+      setProcessingStatus("All modules processed successfully!");
+      setStep("complete");
+      toast.success("Course creation complete! All AI processing finished.");
+    }
+  }, [modules]);
+
+  // Start polling once we enter "processing" and modules have IDs
+  useEffect(() => {
+    if (step !== "processing") return;
+    const hasUploadedModules = modules.some((m) => m.moduleId && m.pipelineStatus !== "completed" && m.pipelineStatus !== "failed");
+    if (!hasUploadedModules) return;
+
+    // Poll every 5 seconds
+    if (!pollingRef.current) {
+      pollingRef.current = setInterval(pollPipelineStatuses, 5000);
+      // Also run immediately
+      pollPipelineStatuses();
+    }
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [step, modules, pollPipelineStatuses]);
 
   const renderStepIndicator = () => {
     const steps = [
@@ -257,6 +355,20 @@ const CreateCourse = () => {
                 </select>
               </div>
 
+              <div className="space-y-2">
+                <Label htmlFor="description">
+                  Description <span className="text-destructive">*</span>
+                </Label>
+                <textarea
+                  id="description"
+                  placeholder="Briefly describe your course..."
+                  className="w-full px-4 py-3 rounded-lg bg-muted border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-accent/30 min-h-[80px]"
+                  value={courseDescription}
+                  onChange={(e) => setCourseDescription(e.target.value)}
+                  maxLength={500}
+                />
+              </div>
+
               <div className="flex justify-end gap-3 pt-4">
                 <Button onClick={() => navigate("/trainer/courses")} variant="outline">
                   Cancel
@@ -349,44 +461,61 @@ const CreateCourse = () => {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Brain className="w-5 h-5 animate-pulse" /> Creating Course
+                <Brain className="w-5 h-5 animate-pulse" /> AI Processing Pipeline
               </CardTitle>
               <CardDescription>
-                Uploading videos and starting AI processing...
+                Please stay on this page. Your modules are being processed by AI.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="space-y-3">
-                <p className="text-sm text-muted-foreground">{processingStatus}</p>
-                <Progress value={processingProgress} className="h-2" />
+              {/* Overall progress */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">{processingStatus}</span>
+                  <span className="font-semibold text-foreground">{processingProgress}%</span>
+                </div>
+                <Progress value={processingProgress} className="h-3" />
               </div>
 
-              {/* Module status list */}
-              <div className="space-y-2">
-                {modules.map((mod, i) => (
-                  <div key={i} className="flex items-center gap-3 text-sm">
-                    {mod.uploadStatus === "done" ? (
-                      <CheckCircle2 className="w-4 h-4 text-success" />
-                    ) : mod.uploadStatus === "uploading" ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-accent" />
-                    ) : mod.uploadStatus === "error" ? (
-                      <AlertCircle className="w-4 h-4 text-destructive" />
-                    ) : (
-                      <div className="w-4 h-4 rounded-full border border-border" />
-                    )}
-                    <span className={mod.uploadStatus === "done" ? "text-muted-foreground" : "text-foreground"}>
-                      {mod.title}
-                    </span>
-                    {mod.error && <span className="text-xs text-destructive">{mod.error}</span>}
-                  </div>
-                ))}
+              {/* Per-module pipeline status */}
+              <div className="space-y-3">
+                {modules.filter(m => m.file).map((mod, i) => {
+                  const status = mod.pipelineStatus || (mod.uploadStatus === "done" ? "processing" : mod.uploadStatus || "pending");
+                  const stepInfo = PIPELINE_STEPS[status] || PIPELINE_STEPS["processing"];
+                  const modPct = stepInfo?.pct ?? 0;
+                  const isDone = status === "completed";
+                  const isFailed = status === "failed";
+
+                  return (
+                    <div key={i} className={`rounded-xl border p-4 space-y-3 transition-colors ${
+                      isDone ? "border-success/40 bg-success/5" : isFailed ? "border-destructive/40 bg-destructive/5" : "border-border bg-card"
+                    }`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-foreground">{mod.title}</span>
+                          {isDone && <Badge variant="outline" className="text-success border-success/40 text-xs">Done</Badge>}
+                          {isFailed && <Badge variant="outline" className="text-destructive border-destructive/40 text-xs">Failed</Badge>}
+                        </div>
+                        <span className="text-xs text-muted-foreground font-medium">{modPct}%</span>
+                      </div>
+                      <Progress value={modPct} className="h-1.5" />
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        {stepInfo.icon}
+                        <span>{stepInfo.label}</span>
+                      </div>
+                      {mod.error && isFailed && (
+                        <p className="text-xs text-destructive">{mod.error}</p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               <Alert>
                 <AlertCircle className="h-4 w-4" />
                 <AlertDescription>
-                  AI processing (transcription, summary, quiz generation) continues in the background
-                  after upload. You can check the status on your course management page.
+                  AI is transcribing your videos, generating summaries, creating quiz questions, and building the knowledge base.
+                  This may take a few minutes per module. Do not close this page.
                 </AlertDescription>
               </Alert>
             </CardContent>
@@ -405,8 +534,7 @@ const CreateCourse = () => {
                 Your course "{courseTitle}" has been created with {modules.length} module(s).
               </p>
               <p className="text-sm text-muted-foreground mb-6">
-                AI is processing your videos in the background. Transcripts, summaries, and quizzes
-                will be available once processing completes.
+                All AI processing is complete. Transcripts, summaries, and quizzes are ready for your students.
               </p>
               <Button onClick={() => navigate("/trainer/courses-management")}>
                 View My Courses

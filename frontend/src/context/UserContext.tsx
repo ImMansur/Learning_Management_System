@@ -6,6 +6,7 @@ import {
   signUpWithFirebase,
   type SignUpRole,
   signOutFirebase,
+  signInWithGoogle,
 } from "@/services/firebaseAuthService";
 import { auth } from "@/lib/firebase";
 
@@ -18,6 +19,7 @@ interface UserContextType {
   signup: (name: string, email: string, password: string, role: SignUpRole) => Promise<User>;
   logout: () => Promise<void>;
   getToken: () => Promise<string>;
+  loginWithGoogle: () => Promise<User>;
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
@@ -72,8 +74,14 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return firebaseUser.getIdToken(true);
   };
 
+  const loginWithGoogle = async () => {
+    const authenticatedUser = await signInWithGoogle();
+    setUser(authenticatedUser);
+    return authenticatedUser;
+  };
+
   return (
-    <UserContext.Provider value={{ user, isLoading, login, signup, logout, getToken }}>
+    <UserContext.Provider value={{ user, isLoading, login, signup, logout, getToken, loginWithGoogle }}>
       {children}
     </UserContext.Provider>
   );

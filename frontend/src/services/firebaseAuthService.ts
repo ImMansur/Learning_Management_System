@@ -4,6 +4,8 @@ import {
   signInWithEmailAndPassword,
   signOut,
   updateProfile,
+  signInWithPopup,
+  GoogleAuthProvider,
   type User as FirebaseUser,
 } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
@@ -29,8 +31,8 @@ const normalizeRole = (value: unknown): UserRole | null => {
 
   const normalized = value.trim().toLowerCase();
   if (normalized === "admin") return "Admin";
-  if (normalized === "trainer") return "Trainer";
-  if (normalized === "learner") return "Learner";
+  if (normalized === "trainer" || normalized === "instructor") return "Trainer";
+  if (normalized === "learner" || normalized === "student") return "Learner";
   return null;
 };
 
@@ -213,3 +215,61 @@ export const signOutFirebase = async () => {
 };
 
 export const isFirebaseAuthConfigured = () => Boolean(auth.app.options.apiKey);
+
+// Google Sign-In
+export const signInWithGoogle = async (): Promise<AuthenticatedUser> => {
+  try {
+    const provider = new GoogleAuthProvider();
+    const credential = await signInWithPopup(auth, provider);
+    const firebaseUser = credential.user;
+    const email = firebaseUser.email || "";
+    const name = firebaseUser.displayName || (email ? email.split("@")[0] : "User");
+
+    // Check Firestore for existing user profile and role
+    let firestoreRole: UserRole | null = null;
+    let isNewUser = false;
+    try {
+      const snapshot = await getDoc(doc(db, "users", firebaseUser.uid));
+      if (snapshot.exists()) {
+        const profile = snapshot.data() as { role?: unknown };
+        firestoreRole = normalizeRole(profile.role);
+      } else {
+        isNewUser = true;
+      }
+    } catch {}
+
+    // Only allow Trainer if role is set in Firestore, otherwise always Learner
+    const assignedRole: UserRole = firestoreRole === "Trainer" ? "Trainer" : "Learner";
+
+    // Only set name if new user (first login)
+    if (isNewUser) {
+      try {
+        await saveUserProfile(firebaseUser.uid, {
+          email,
+          name,
+          role: assignedRole,
+        });
+      } catch {}
+    } else {
+      // Existing user: only update role if needed, never overwrite name
+      try {
+        await saveUserProfile(firebaseUser.uid, {
+          email,
+          name: undefined as any, // will be ignored by Firestore merge
+          role: assignedRole,
+        });
+      } catch {}
+    }
+
+    // Locally cache the role
+    cacheRoleLocally(firebaseUser.uid, email, assignedRole);
+
+    // Build user object with enforced role
+    const user = await buildAuthenticatedUser(firebaseUser);
+    // Overwrite role in returned user object to ensure enforcement
+    return { ...user, role: assignedRole };
+  } catch (error) {
+    const code = typeof error === "object" && error && "code" in error ? String(error.code) : undefined;
+    throw new Error(mapFirebaseError(code));
+  }
+};

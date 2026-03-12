@@ -1,18 +1,23 @@
 import { useEffect, useState, useRef } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import AppLayout from "@/components/AppLayout";
+import TrainerLayout from "@/components/TrainerLayout";
 import { LessonChatBot } from "@/components/LessonChatBot";
 import {
   getCourseCatalog,
+  getMyCourses,
   getCourseModules,
   getModuleAIAssets,
   getTTSStreamUrl,
+  getMyProfile,
   BackendCourse,
   BackendModule,
   ModuleAIAssets,
+  StudentProfile,
 } from "@/services/lmsService";
 import { useUser } from "@/context/UserContext";
 import { isQuizPassed } from "@/services/quizService";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   PlayCircle,
@@ -30,6 +35,9 @@ import {
 const LessonPage = () => {
   const { courseId, lessonId: moduleId } = useParams();
   const { user, getToken } = useUser();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const isTrainer = location.pathname.startsWith("/trainer/");
 
   const [course, setCourse] = useState<BackendCourse | null>(null);
   const [modules, setModules] = useState<BackendModule[]>([]);
@@ -39,6 +47,7 @@ const LessonPage = () => {
   const [ttsLang, setTtsLang] = useState("en");
   const [ttsPlaying, setTtsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [profile, setProfile] = useState<StudentProfile | null>(null);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
@@ -51,7 +60,7 @@ const LessonPage = () => {
       try {
         const token = await getToken();
         const [catalogData, modulesData] = await Promise.all([
-          getCourseCatalog(token),
+          isTrainer ? getMyCourses(token) : getCourseCatalog(token),
           getCourseModules(token, courseId),
         ]);
         const foundCourse = catalogData.find((c) => c.id === courseId) || null;
@@ -59,6 +68,19 @@ const LessonPage = () => {
         setModules(modulesData);
         const found = modulesData.find((m) => m.id === moduleId) || null;
         setCurrentModule(found);
+
+        // Learner lock check: redirect if module is locked
+        if (!isTrainer && found && modulesData.length > 0) {
+          const profileData = await getMyProfile(token).catch(() => null);
+          setProfile(profileData);
+          const completed = new Set(profileData?.enrollments?.[courseId!]?.completed_modules || []);
+          const idx = modulesData.findIndex((m) => m.id === moduleId);
+          if (idx > 0 && !completed.has(modulesData[idx - 1].id)) {
+            toast.error("Complete the previous module first.");
+            navigate(`/courses/${courseId}`, { replace: true });
+            return;
+          }
+        }
 
         if (found) {
           const assets = await getModuleAIAssets(found.id).catch(() => null);
@@ -112,7 +134,7 @@ const LessonPage = () => {
   const currentIdx = modules.findIndex((m) => m.id === moduleId);
   const prevModule = currentIdx > 0 ? modules[currentIdx - 1] : null;
   const nextModule = currentIdx < modules.length - 1 ? modules[currentIdx + 1] : null;
-  const currentQuizPassed = courseId && moduleId ? isQuizPassed(courseId, moduleId) : false;
+  const currentQuizPassed = isTrainer || (courseId && moduleId ? isQuizPassed(courseId, moduleId) : false);
 
   const ttsLanguages = [
     { code: "en", label: "English" },
@@ -124,12 +146,17 @@ const LessonPage = () => {
     { code: "zh", label: "Chinese" },
   ];
 
+  const Layout = isTrainer ? TrainerLayout : AppLayout;
+  const coursesLink = isTrainer ? "/trainer/courses" : "/courses";
+  const lessonLink = (modId: string) =>
+    isTrainer ? `/trainer/course/${courseId}/watch/${modId}` : `/courses/${courseId}/lesson/${modId}`;
+
   return (
-    <AppLayout>
+    <Layout>
       <div className="flex items-center gap-2 text-sm text-muted-foreground mb-6">
-        <Link to="/courses" className="hover:text-foreground transition-colors">Courses</Link>
+        <Link to={coursesLink} className="hover:text-foreground transition-colors">{isTrainer ? "My Courses" : "Courses"}</Link>
         <ChevronRight className="w-3 h-3" />
-        <Link to={`/courses/${courseId}`} className="hover:text-foreground transition-colors">{course.title}</Link>
+        <Link to={isTrainer ? `/trainer/course/${courseId}/edit` : `/courses/${courseId}`} className="hover:text-foreground transition-colors">{course.title}</Link>
         <ChevronRight className="w-3 h-3" />
         <span className="text-foreground font-medium">{currentModule.title}</span>
       </div>
@@ -193,7 +220,7 @@ const LessonPage = () => {
           <div className="flex items-center justify-between">
             {prevModule ? (
               <Link
-                to={`/courses/${courseId}/lesson/${prevModule.id}`}
+                to={lessonLink(prevModule.id)}
                 className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-border bg-card text-sm font-medium text-card-foreground hover:bg-muted/50 transition-colors"
               >
                 <ArrowLeft className="w-4 h-4" /> {prevModule.title}
@@ -202,7 +229,7 @@ const LessonPage = () => {
             {nextModule ? (
               currentQuizPassed ? (
                 <Link
-                  to={`/courses/${courseId}/lesson/${nextModule.id}`}
+                  to={lessonLink(nextModule.id)}
                   className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-accent text-accent-foreground text-sm font-semibold hover:opacity-90 transition-opacity"
                 >
                   {nextModule.title} <ChevronRight className="w-4 h-4" />
@@ -305,7 +332,7 @@ const LessonPage = () => {
               {modules.map((mod, idx) => {
                 const isActive = mod.id === moduleId;
                 // A module is accessible if it's the first, already completed, or all previous modules have passed quizzes
-                const isAccessible = idx === 0 || mod.status === "completed" || modules.slice(0, idx).every((prev) => courseId && isQuizPassed(courseId, prev.id));
+                const isAccessible = isTrainer || idx === 0 || mod.status === "completed" || modules.slice(0, idx).every((prev) => courseId && isQuizPassed(courseId, prev.id));
                 if (!isAccessible) {
                   return (
                     <div
@@ -321,7 +348,7 @@ const LessonPage = () => {
                 return (
                   <Link
                     key={mod.id}
-                    to={`/courses/${courseId}/lesson/${mod.id}`}
+                    to={lessonLink(mod.id)}
                     className={`flex items-center gap-3 px-6 py-3 text-sm transition-colors ${
                       isActive ? "bg-accent/10 text-accent font-medium" : "hover:bg-muted/50 text-card-foreground"
                     }`}
@@ -342,7 +369,7 @@ const LessonPage = () => {
         </div>
       </div>
       <LessonChatBot courseId={courseId} />
-    </AppLayout>
+    </Layout>
   );
 };
 

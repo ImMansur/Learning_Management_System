@@ -10,7 +10,24 @@ import { useUser } from "@/context/UserContext";
 
 const Login = () => {
   const navigate = useNavigate();
-  const { user, login, isLoading } = useUser();
+  const { user, login, isLoading, loginWithGoogle } = useUser();
+    const [googleLoading, setGoogleLoading] = useState(false);
+    const handleGoogleLogin = async () => {
+      if (googleLoading) return;
+      setGoogleLoading(true);
+      try {
+        const authenticatedUser = await loginWithGoogle();
+        toast({
+          title: "Welcome!",
+          description: `Logged in as ${authenticatedUser.name}`,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Google login failed";
+        toast({ title: "Login failed", description: message, variant: "destructive" });
+      } finally {
+        setGoogleLoading(false);
+      }
+    };
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -124,6 +141,21 @@ const Login = () => {
           )}
 
           <form onSubmit={handleLogin} className="space-y-5">
+                        <Button
+                          type="button"
+                          onClick={handleGoogleLogin}
+                          disabled={googleLoading || isLoading || !isFirebaseAuthConfigured()}
+                          className="w-full h-12 rounded-xl text-base font-semibold bg-white text-black border border-gray-300 hover:bg-gray-100 flex items-center justify-center gap-2 mb-2"
+                        >
+                          {googleLoading ? (
+                            <span className="animate-pulse">Signing in with Google…</span>
+                          ) : (
+                            <>
+                              <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />
+                              Sign in with Google
+                            </>
+                          )}
+                        </Button>
             <div className="space-y-2">
               <Label htmlFor="email" className="text-foreground font-medium">
                 Email

@@ -264,7 +264,7 @@ const TrainerCourseProgressDetail = () => {
 
                     <Progress value={student.progress} className="h-2 mb-3" />
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                       <div>
                         <p className="text-muted-foreground text-xs mb-1">Modules Completed</p>
                         <p className="font-medium text-foreground">
@@ -275,6 +275,12 @@ const TrainerCourseProgressDetail = () => {
                         <div>
                           <p className="text-muted-foreground text-xs mb-1">Enrolled Date</p>
                           <p className="font-medium text-foreground">{new Date(student.enrolled_at).toLocaleDateString()}</p>
+                        </div>
+                      )}
+                      {student.progress === 100 && student.completed_at && (
+                        <div>
+                          <p className="text-muted-foreground text-xs mb-1">Completed Date</p>
+                          <p className="font-medium text-success">{new Date(student.completed_at).toLocaleDateString()}</p>
                         </div>
                       )}
                     </div>

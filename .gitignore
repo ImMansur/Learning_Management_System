@@ -36,6 +36,23 @@ Thumbs.db
 # Logs
 # -------------------------
 *.log
- 
-# Ignore Firebase config (contains secrets)
+# -------------------------
+# Node.js dependencies
+node_modules/
+frontend/node_modules/
+frontend/bun.lockb
+frontend/package-lock.json
+frontend/yarn.lock
+frontend/pnpm-lock.yaml
 frontend/src/lib/firebase.ts
+
+# -------------------------
+# Sensitive credentials
+# -------------------------
+backend/core/firebase_config.json
+firebase_config.json
+
+# -------------------------
+# Build output
+# -------------------------
+frontend/dist/
